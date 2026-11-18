@@ -1,6 +1,7 @@
 import telebot
 import requests
 
+# Reemplaza con tus tokens reales
 TELEGRAM_TOKEN = '8884589605:AAE8Ti67Vhw7-JPrKZK3CSXQnP1nHR4BHik'
 ODDS_API_KEY = '043b604b50d8519fcd730946f3aa53a4'
 
@@ -8,7 +9,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Casa de referencia "Sharp" (la más precisa). Suele ser Pinnacle.
 CASA_REFERENCIA = 'Pinnacle' 
-# Margen de valor mínimo esperado para que el bot lo considere una "Recomendación" (ej: 5% de ventaja)
+# Margen de valor mínimo esperado para que el bot lo considere una "Recomendación" (ej: 1.05 = 5% de ventaja)
 MARGEN_VALUE_MINIMO = 1.05 
 
 def buscar_recomendaciones(deporte):
@@ -22,7 +23,7 @@ def buscar_recomendaciones(deporte):
     
     response = requests.get(url, params=params)
     if response.status_code != 200:
-        return "❌ Error al conectar con la API."
+        return "❌ Error al conectar con la API de The Odds API."
         
     data = response.json()
     if not data:
@@ -35,23 +36,22 @@ def buscar_recomendaciones(deporte):
     for partido in data:
         cuotas_pinnacle = {}
         
-        # 1. Primero, buscamos las cuotas de la casa de referencia (Pinnacle)
+        # 1. Buscamos las cuotas de la casa de referencia (Pinnacle)
         for bookmaker in partido['bookmakers']:
             if bookmaker['title'] == CASA_REFERENCIA:
                 for market in bookmaker['markets']:
                     if market['key'] == 'h2h':
                         for outcome in market['outcomes']:
                             cuotas_pinnacle[outcome['name']] = outcome['price']
-                break # Ya encontramos Pinnacle para este partido
+                break 
 
-        # Si el partido no está en Pinnacle, lo saltamos, porque no tenemos contra qué comparar
         if not cuotas_pinnacle:
             continue
 
         # 2. Comparamos las demás casas contra Pinnacle
         for bookmaker in partido['bookmakers']:
             casa_actual = bookmaker['title']
-            if casa_actual == CASA_REFERENCIA: continue # No comparamos Pinnacle consigo mismo
+            if casa_actual == CASA_REFERENCIA: continue 
             
             for market in bookmaker['markets']:
                 if market['key'] == 'h2h':
@@ -60,10 +60,8 @@ def buscar_recomendaciones(deporte):
                         cuota_ofrecida = outcome['price']
                         cuota_real = cuotas_pinnacle.get(equipo, 0)
                         
-                        # 3. La Matemática del Valor (Valuebet)
-                        # Si la casa X paga considerablemente más que Pinnacle, es un error de la casa X.
+                        # 3. Cálculo de la ventaja matemática (Edge)
                         if cuota_real > 0:
-                            # Calculamos si la cuota ofrecida supera nuestro margen de ventaja sobre la "real"
                             ventaja = cuota_ofrecida / cuota_real 
                             
                             if ventaja >= MARGEN_VALUE_MINIMO:
@@ -79,20 +77,45 @@ def buscar_recomendaciones(deporte):
                                 recomendaciones += "--------------------------\n"
 
     if not encontro_oportunidad:
-        return f"😔 No encontré recomendaciones de valor (Valuebets) en este momento para {deporte} con un margen mayor al {(MARGEN_VALUE_MINIMO-1)*100}%. Las casas están ajustadas."
+        return f"😔 No encontré recomendaciones de valor en este momento para {deporte} con un margen mayor al {(MARGEN_VALUE_MINIMO-1)*100}%. Las casas están ajustadas."
         
     return recomendaciones
+
+def enviar_mensajes_seguros(chat_id, texto_completo):
+    """Divide el mensaje si es muy largo sin romper el formato Markdown de Telegram"""
+    if len(texto_completo) <= 4000:
+        bot.send_message(chat_id, texto_completo, parse_mode="Markdown")
+        return
+
+    # Si supera los 4096 caracteres, lo dividimos usando nuestro separador
+    partes = texto_completo.split("--------------------------\n")
+    mensaje_temporal = ""
+    
+    for parte in partes:
+        if not parte.strip():
+            continue
+            
+        if len(mensaje_temporal) + len(parte) < 4000:
+            mensaje_temporal += parte + "--------------------------\n"
+        else:
+            bot.send_message(chat_id, mensaje_temporal, parse_mode="Markdown")
+            mensaje_temporal = parte + "--------------------------\n"
+            
+    if mensaje_temporal.strip():
+        bot.send_message(chat_id, mensaje_temporal, parse_mode="Markdown")
 
 @bot.message_handler(commands=['nba_recomendaciones'])
 def comando_nba_value(message):
     bot.reply_to(message, "Analizando el mercado NBA en busca de errores en las casas de apuestas... 🤖🏀")
     resultado = buscar_recomendaciones('basketball_nba')
-    bot.send_message(message.chat.id, resultado, parse_mode="Markdown")
+    enviar_mensajes_seguros(message.chat.id, resultado)
 
 @bot.message_handler(commands=['futbol_recomendaciones'])
 def comando_futbol_value(message):
     bot.reply_to(message, "Cruzando datos de La Liga contra Pinnacle buscando valor... 🤖⚽")
     resultado = buscar_recomendaciones('soccer_spain_la_liga')
-    bot.send_message(message.chat.id, resultado, parse_mode="Markdown")
+    enviar_mensajes_seguros(message.chat.id, resultado)
 
-bot.polling()
+if __name__ == "__main__":
+    print("Bot a la escucha de comandos en Telegram...")
+    bot.polling(none_stop=True)
